@@ -1,14 +1,8 @@
-import random
 import string
-import time
 from datetime import datetime
 
-import httpx
-
 from src.db import get_db
-
-# AUTOCOMPLETE_STUB: capture the request from your browser's Network tab
-# (filter for "completion" or "suggest"), copy as cURL, then wire _fetch_suggestions below.
+from src.transport import client_session, throttled_get
 
 SEEDS = [
     "personalized keychain",
@@ -23,15 +17,6 @@ MODIFIER_STEMS = [
     "engraved", "initial", "kids", "men", "women", "gift",
 ]
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-]
-
-
 _AUTOCOMPLETE_URL = "https://www.amazon.com/suggestions"
 _AUTOCOMPLETE_PARAMS = {
     "alias": "aps",
@@ -45,15 +30,13 @@ _AUTOCOMPLETE_PARAMS = {
 }
 _AUTOCOMPLETE_HEADERS = {
     "accept": "application/json, text/javascript, */*; q=0.01",
-    "accept-language": "en-US,en;q=0.9",
 }
 
 
-def _fetch_suggestions(query: str, client: httpx.Client) -> list[dict]:
+def _fetch_suggestions(query: str, client) -> list[dict]:
     """Returns list of {"suggestion": str, "rank": int} (rank 0 = top)."""
     params = {**_AUTOCOMPLETE_PARAMS, "prefix": query}
-    resp = client.get(_AUTOCOMPLETE_URL, params=params, headers=_AUTOCOMPLETE_HEADERS, timeout=10)
-    resp.raise_for_status()
+    resp = throttled_get(client, _AUTOCOMPLETE_URL, params=params, extra_headers=_AUTOCOMPLETE_HEADERS)
     data = resp.json()
     results = []
     for rank, item in enumerate(data.get("suggestions", [])):
@@ -87,7 +70,7 @@ def _upsert_keyword(conn, phrase: str, rank: int, now: str):
     )
 
 
-def harvest(db_path: str, seeds: list[str] = None, max_depth: int = 2):
+def harvest(db_path: str, seeds: list[str] = None):
     if seeds is None:
         seeds = SEEDS
 
@@ -96,26 +79,19 @@ def harvest(db_path: str, seeds: list[str] = None, max_depth: int = 2):
     total = len(queries)
     print(f"Harvesting {total} queries from {len(seeds)} seeds")
 
-    with httpx.Client(headers={"Accept-Encoding": "gzip"}) as client:
+    with client_session(sticky=False) as client:
         for i, query in enumerate(queries):
-            client.headers["User-Agent"] = random.choice(USER_AGENTS)
             print(f"[{i+1}/{total}] {query}")
             try:
                 suggestions = _fetch_suggestions(query, client)
-            except NotImplementedError as e:
-                print(f"  STUB: {e}")
-                break
             except Exception as e:
                 print(f"  ERROR: {e}")
-                time.sleep(random.uniform(0.5, 2.0))
                 continue
 
             now = datetime.utcnow().isoformat()
             for item in suggestions:
                 _upsert_keyword(conn, item["suggestion"], item["rank"], now)
-
             conn.commit()
-            time.sleep(random.uniform(0.5, 2.0))
 
     conn.close()
     print("Done.")
