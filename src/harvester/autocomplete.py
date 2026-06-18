@@ -32,15 +32,35 @@ USER_AGENTS = [
 ]
 
 
+_AUTOCOMPLETE_URL = "https://www.amazon.com/suggestions"
+_AUTOCOMPLETE_PARAMS = {
+    "alias": "aps",
+    "suggestion-type": "KEYWORD",
+    "page-type": "Gateway",
+    "site-variant": "desktop",
+    "version": "3",
+    "lop": "en_US",
+    "mid": "ATVPDKIKX0DER",
+    "limit": "11",
+}
+_AUTOCOMPLETE_HEADERS = {
+    "accept": "application/json, text/javascript, */*; q=0.01",
+    "accept-language": "en-US,en;q=0.9",
+}
+
+
 def _fetch_suggestions(query: str, client: httpx.Client) -> list[dict]:
-    """
-    STUB — wire this once the user pastes the captured cURL from their browser.
-    Returns: list of {"suggestion": str, "rank": int}
-    """
-    raise NotImplementedError(
-        "Paste the cURL from your browser network tab and wire this function. "
-        "See AUTOCOMPLETE_STUB note in this file."
-    )
+    """Returns list of {"suggestion": str, "rank": int} (rank 0 = top)."""
+    params = {**_AUTOCOMPLETE_PARAMS, "prefix": query}
+    resp = client.get(_AUTOCOMPLETE_URL, params=params, headers=_AUTOCOMPLETE_HEADERS, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    results = []
+    for rank, item in enumerate(data.get("suggestions", [])):
+        value = item.get("value", "").strip()
+        if value:
+            results.append({"suggestion": value, "rank": rank})
+    return results
 
 
 def _expand_queries(seeds: list[str]) -> list[str]:
